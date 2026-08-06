@@ -14,6 +14,7 @@ yfinance 는 상업용 재배포가 안 된다. 지금 단계(개인 확인용)�
 from __future__ import annotations
 
 import time
+from pathlib import Path
 from typing import Dict, List, Optional, Sequence
 
 import numpy as np
@@ -24,18 +25,58 @@ import pandas as pd
 # 1. 유니버스
 # ---------------------------------------------------------------------------
 
-def fetch_sp500() -> pd.DataFrame:
-    """위키피디아 S&P500 구성표. ticker / name / sector / sub_industry."""
-    url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-    tbl = pd.read_html(url)[0]
-    df = tbl.rename(columns={
-        "Symbol": "ticker", "Security": "name",
-        "GICS Sector": "sector", "GICS Sub-Industry": "sub_industry",
-    })[["ticker", "name", "sector", "sub_industry"]]
+_SP500_CSV = ("https://raw.githubusercontent.com/datasets/"
+              "s-and-p-500-companies/main/data/constituents.csv")
+_SP500_WIKI = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+_SP500_LOCAL = Path(__file__).with_name("sp500_fallback.csv")
+
+_SP500_COLS = {
+    "Symbol": "ticker", "Security": "name",
+    "GICS Sector": "sector", "GICS Sub-Industry": "sub_industry",
+}
+
+
+def _shape_sp500(tbl: pd.DataFrame) -> pd.DataFrame:
+    """세 경로 모두 같은 컬럼·같은 티커 표기로 맞춘다.
+
+    로컬 사본은 이미 컬럼명이 맞아 rename 이 무의미하지만, BRK.B → BRK-B 는
+    거기서도 해 줘야 한다. 원본 CSV 가 점 표기를 쓰기 때문.
+    """
+    df = tbl.rename(columns=_SP500_COLS)[["ticker", "name", "sector", "sub_industry"]]
     # BRK.B → BRK-B (야후 표기)
     df["ticker"] = df["ticker"].str.replace(".", "-", regex=False).str.strip()
-    print(f"[유니버스] S&P500 {len(df)}종목")
     return df
+
+
+def fetch_sp500() -> pd.DataFrame:
+    """S&P500 구성표. ticker / name / sector / sub_industry.
+
+    위키피디아는 깃허브 액션 IP 를 곧잘 막는다. 그래서 순서를 뒤집었다 —
+    깃허브에 올라와 있는 CSV 를 먼저 보고, 안 되면 위키, 그것도 안 되면
+    저장소에 같이 넣어 둔 sp500_fallback.csv 를 쓴다. 마지막 것은 네트워크
+    없이도 되니 여기서 실행이 멈추는 일은 없다.
+    """
+    sources = [
+        ("CSV", lambda: _shape_sp500(pd.read_csv(_SP500_CSV))),
+        ("위키", lambda: _shape_sp500(pd.read_html(_SP500_WIKI)[0])),
+        ("로컬", lambda: _shape_sp500(pd.read_csv(_SP500_LOCAL))),
+    ]
+
+    for name, load in sources:
+        try:
+            df = load()
+        except Exception as e:
+            print(f"[유니버스] {name} 실패: {e}")
+            continue
+        if df.empty:
+            print(f"[유니버스] {name} 실패: 표가 비어 있다")
+            continue
+        stale = " · 갱신되지 않은 사본" if name == "로컬" else ""
+        print(f"[유니버스] S&P500 {len(df)}종목 ({name}{stale})")
+        return df
+
+    raise RuntimeError("S&P500 구성표를 어디에서도 읽지 못했습니다 "
+                       f"(마지막 수단 {_SP500_LOCAL} 도 실패)")
 
 
 # ---------------------------------------------------------------------------
@@ -43,8 +84,13 @@ def fetch_sp500() -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 def fetch_prices(tickers: Sequence[str], years: float = 3.0,
-                 batch: int = 60, pause: float = 1.0) -> Dict[str, pd.DataFrame]:
+                 batch: int = 60, pause: float = 1.0,
+                 tries: int = 3) -> Dict[str, pd.DataFrame]:
     """일봉 OHLCV. 배치로 나눠 받는다 — 500개를 한 번에 던지면 자주 잘린다.
+
+    배치 실패는 대개 레이트 리밋이라 잠깐 쉬면 풀린다. 대기를 두 배씩 늘리며
+    tries 번까지 다시 던진다. 그래도 안 되면 그 배치만 버리고 넘어간다 —
+    60종목 빠졌다고 나머지 440종목 스크리닝을 포기할 이유는 없다.
 
     auto_adjust=True: 액면분할·배당 조정. RS와 패턴 모두 조정가 기준이어야 한다.
     """
@@ -56,12 +102,29 @@ def fetch_prices(tickers: Sequence[str], years: float = 3.0,
 
     for i in range(0, len(tickers), batch):
         chunk = tickers[i:i + batch]
-        try:
-            raw = yf.download(chunk, period=period, interval="1d",
-                              auto_adjust=True, group_by="ticker",
-                              threads=True, progress=False)
-        except Exception as e:
-            print(f"[가격] 배치 {i//batch+1} 실패: {e}")
+        n_batch = i // batch + 1
+
+        raw = None
+        for attempt in range(1, tries + 1):
+            try:
+                raw = yf.download(chunk, period=period, interval="1d",
+                                  auto_adjust=True, group_by="ticker",
+                                  threads=True, progress=False)
+                if raw is not None and not raw.empty:
+                    break
+                reason = "빈 응답"
+            except Exception as e:
+                reason = str(e)
+            raw = None
+            if attempt < tries:
+                wait = pause * (2 ** attempt)
+                print(f"[가격] 배치 {n_batch} 실패({attempt}/{tries}): {reason}"
+                      f" · {wait:.0f}초 뒤 재시도")
+                time.sleep(wait)
+            else:
+                print(f"[가격] 배치 {n_batch} 포기({tries}회 실패): {reason}")
+
+        if raw is None:
             continue
 
         for tk in chunk:
