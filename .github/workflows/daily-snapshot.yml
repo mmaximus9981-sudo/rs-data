@@ -1,0 +1,98 @@
+name: 일일 스냅샷
+
+# 미국 장 마감(동부 16:00) 이후에 돈다. 22:00 UTC = 한국 시간 아침 7시.
+# 월~금 UTC 기준이라 한국에서는 화~토 아침에 갱신된다.
+on:
+  schedule:
+    - cron: "0 22 * * 1-5"
+  workflow_dispatch:            # 저장소 Actions 탭에서 손으로도 돌릴 수 있다
+    inputs:
+      limit:
+        description: "종목 수 제한 (0 이면 전체 500)"
+        required: false
+        default: "0"
+      skip_fundamentals:
+        description: "실적 수집 건너뛰기 (빠름)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write               # 결과를 data 브랜치에 밀어 넣기 위해 필요
+
+concurrency:                    # 앞 실행이 끝나기 전에 또 돌지 않도록
+  group: snapshot
+  cancel-in-progress: false
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: 코드 가져오기
+        uses: actions/checkout@v4
+
+      - name: 파이썬 준비
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: 패키지 설치
+        run: pip install -r requirements.txt
+
+      # 같은 날 재실행할 때 야후를 다시 두드리지 않게 한다.
+      # 날짜가 바뀌면 캐시 파일명이 달라져서 자연히 새 데이터를 받는다.
+      - name: 캐시 복원
+        uses: actions/cache@v4
+        with:
+          path: cache
+          key: yf-${{ github.run_id }}
+          restore-keys: yf-
+
+      - name: 스크리닝 실행
+        run: |
+          ARGS=""
+          if [ "${{ github.event.inputs.limit }}" != "0" ] && [ -n "${{ github.event.inputs.limit }}" ]; then
+            ARGS="$ARGS --limit ${{ github.event.inputs.limit }}"
+          fi
+          if [ "${{ github.event.inputs.skip_fundamentals }}" = "true" ]; then
+            ARGS="$ARGS --no-fundamentals"
+          fi
+          echo "실행: python run_sp500.py $ARGS"
+          python run_sp500.py $ARGS
+
+      # 여기가 안전핀이다. 통과 못 하면 아래 단계가 통째로 건너뛰어지고
+      # 폰에는 어제 스냅샷이 그대로 남는다. 망가진 데이터가 배포되는 것보다 낫다.
+      - name: 스냅샷 검증
+        run: python validate_snapshot.py latest.json
+
+      # data 브랜치에 '이력 없이' 덮어쓴다.
+      # 매일 몇 MB짜리 JSON을 main 에 쌓으면 1년이면 저장소가 수 GB가 된다.
+      # orphan 브랜치를 매번 새로 만들어 강제 푸시하면 커밋이 항상 하나뿐이다.
+      - name: 데이터 배포
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          mkdir -p /tmp/pages
+          cp latest.json /tmp/pages/
+          cp latest.json "/tmp/pages/snapshot_$(date -u +%Y%m%d).json"
+          echo "" > /tmp/pages/.nojekyll
+
+          cd /tmp/pages
+          git init -q -b data
+          git remote add origin "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
+          git add -A
+          git commit -q -m "snapshot $(date -u +%F)"
+          git push -qf origin data
+
+          echo "배포 완료: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/latest.json"
+
+      - name: 실패 시 로그 남기기
+        if: failure()
+        run: |
+          echo "실행에 실패했습니다. 흔한 원인:"
+          echo "  1) 야후 레이트 리밋 — 잠시 뒤 Actions 탭에서 Re-run"
+          echo "  2) 검증 실패 — 위 '스냅샷 검증' 단계 출력을 확인"
+          ls -la latest.json 2>/dev/null || echo "  latest.json 이 만들어지지 않았습니다"
