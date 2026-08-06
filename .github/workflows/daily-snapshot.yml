@@ -72,8 +72,10 @@ jobs:
       # orphan 브랜치를 매번 새로 만들어 강제 푸시하면 커밋이 항상 하나뿐이다.
       - name: 데이터 배포
         run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # --global 이어야 한다. 이 설정은 체크아웃된 저장소가 아니라
+          # 아래에서 새로 만드는 /tmp/pages 저장소에서 쓰인다.
+          git config --global user.name  "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           mkdir -p /tmp/pages
           cp latest.json /tmp/pages/
