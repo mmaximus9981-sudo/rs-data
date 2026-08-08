@@ -1,14 +1,19 @@
 <!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
-<meta name="theme-color" content="#0B111B">
+<meta name="theme-color" content="#FFFFFF">
 <title>RS 다이나믹스</title>
 <style>
 :root{
-  --ground:#0B111B; --panel:#131C2A; --panel2:#182334; --hair:#22314A;
-  --text:#E8EEF8; --muted:#7E90AA; --faint:#4C5C74;
-  --lead:#F0B429; --improve:#35B0A0; --weaken:#E06B5E; --lag:#55677F;
-  --up:#3FBF8F; --down:#E4695C;
+  --ground:#FFFFFF; --panel:#F7F9FC; --panel2:#EBF0F7; --hair:#DBE2EC;
+  --text:#111A27; --muted:#57677E; --faint:#8E9DB2;
+  /* 흰 배경에서도 읽히도록 어두운 쪽으로 잡았다. 원래 다크용 색을 그대로 쓰면
+     노랑·청록이 배경에 묻혀 4분면 구분이 사라진다. */
+  --lead:#C07C0A; --improve:#0E857A; --weaken:#C43F35; --lag:#8496AB;
+  --up:#12A05F; --down:#D6402F;
+  /* 차트 전용 */
+  --grid:#E9EDF3; --axis:#7C8B9E;
+  --ma50:#E0921F; --ma150:#8B9AAF; --ma200:#2F6BD8;
   --mono:ui-monospace,"SFMono-Regular","Roboto Mono",Menlo,monospace;
   --sans:system-ui,"Noto Sans KR",-apple-system,"Segoe UI",sans-serif;
 }
@@ -72,7 +77,7 @@ button{font-family:inherit;border:0;background:none;color:inherit;cursor:pointer
 .badge{font:600 9px/1 var(--sans);padding:4px 6px;border-radius:5px;letter-spacing:.03em}
 .badge.setup{background:var(--text);color:var(--ground)}
 .badge.quad{border:1px solid currentColor}
-.badge.warn{background:rgba(224,107,94,.16);color:var(--weaken)}
+.badge.warn{background:rgba(196,63,53,.10);color:var(--weaken)}
 .badge.soft{background:var(--panel2);color:var(--muted)}
 .card .right{text-align:right}
 .card .rs{font:700 19px/1 var(--mono)}
@@ -87,7 +92,8 @@ button{font-family:inherit;border:0;background:none;color:inherit;cursor:pointer
 .quad-tag{font:600 10px/1 var(--sans);letter-spacing:.14em;fill:var(--muted);opacity:.6}
 .tail{fill:none;stroke-linecap:round}
 .tick-label{font:600 9px/1 var(--mono);fill:var(--text);opacity:.85;pointer-events:none}
-.dim{opacity:.13}
+/* 흰 배경에서는 .13 이면 사실상 사라진다. 흐리되 남아 있게. */
+.dim{opacity:.22}
 .mark{cursor:pointer}
 #legend{position:absolute;left:0;right:0;bottom:0;padding:10px 14px 14px;display:flex;gap:13px;
   justify-content:center;flex-wrap:wrap;background:linear-gradient(transparent,var(--ground) 55%);
@@ -128,6 +134,21 @@ button{font-family:inherit;border:0;background:none;color:inherit;cursor:pointer
 .pp .t{font:700 12px/1 var(--sans);color:var(--lead)}
 .pp p{margin:9px 0 0;font:500 12px/1.65 var(--sans);color:var(--muted)}
 .note{margin:12px 0 0;font:500 11px/1.65 var(--sans);color:var(--faint)}
+
+/* ── 가격 차트 ─────────────────────────────────── */
+.chart-bar{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+.seg{display:flex;border:1px solid var(--hair);border-radius:8px;overflow:hidden}
+.seg button{padding:6px 12px;font:600 11px/1 var(--sans);color:var(--muted);background:var(--ground)}
+.seg button.on{background:var(--text);color:var(--ground)}
+.chart-range{font:500 10px/1 var(--mono);color:var(--muted)}
+.chart-reset{margin-left:auto;padding:6px 10px;font:600 10px/1 var(--sans);
+  color:var(--muted);border:1px solid var(--hair);border-radius:8px}
+/* pan-y: 세로 스크롤은 시트에 넘기고 가로 끌기만 차트가 가져간다.
+   none 으로 막으면 차트 위에서 상세 시트를 스크롤할 수 없다. */
+.chart-box{touch-action:pan-y;border:1px solid var(--hair);border-radius:10px;
+  background:var(--ground);overflow:hidden}
+.chart-box svg{display:block;width:100%;cursor:crosshair}
+.chart-empty{padding:28px 0;text-align:center;color:var(--faint);font:500 11px var(--sans)}
 </style>
 
 <div id="market">
@@ -398,7 +419,10 @@ document.querySelectorAll("#tabs button").forEach(b=>{
     if(b.dataset.v==="map") requestAnimationFrame(drawMap);
   };
 });
-window.addEventListener("resize",()=>{if($("v-map").classList.contains("on"))drawMap();});
+window.addEventListener("resize",()=>{
+  if($("v-map").classList.contains("on")) drawMap();
+  if($("detail").classList.contains("on")) drawChart();
+});
 
 /* ── 종목 상세 ─────────────────────────────────── */
 $("dback").onclick=()=>$("detail").classList.remove("on");
@@ -409,7 +433,7 @@ function openDetail(tk){
   $("d-nm").textContent=t.name||"";
   $("dbody").innerHTML=detailBody(t);
   const host=document.getElementById("chart-host");
-  if(host) host.innerHTML=priceChart(t,host.clientWidth||document.body.clientWidth-32);
+  if(host) mountChart(host,t);
   $("detail").classList.add("on");
   $("detail").scrollTop=0;
 }
@@ -489,70 +513,296 @@ function detailBody(t){
 }
 
 /* 캔들 + 이동평균 + 지지선 + EPS·매출 계단 */
-function priceChart(t,W){
-  const s=t.series; if(!s||!s.c||s.c.length<10) return '<p class="note">가격 시리즈가 없습니다.</p>';
-  const n=s.c.length, PH=230, EH=t.quarters&&t.quarters.length?76:0, VH=34, gap=8;
-  const H=PH+VH+(EH?EH+gap:0)+gap, padR=40, w=W-padR;
-  const mas=[s.ma50,s.ma150,s.ma200].filter(Boolean).flat().filter(v=>v!=null);
-  const lo=Math.min(...s.l,...mas), hi=Math.max(...s.h,...mas), span=(hi-lo)||1;
-  const x=i=>i/(n-1)*w, y=v=>PH-(v-lo)/span*PH*0.92-PH*0.04;
-  const bw=Math.max(1.4,w/n*0.62);
-  let o=[`<svg width="100%" viewBox="0 0 ${W} ${H}" style="display:block">`];
+/* ── 가격 차트 ─────────────────────────────────────────────────────
+   정적 SVG 문자열이 아니라 상태를 갖는 컴포넌트다. 보이는 구간을
+   [i0,i1) 인덱스 창으로 들고 있고, 확대·이동은 그 창만 움직인 뒤 다시 그린다.
+   가격 범위도 창 안의 값으로만 잡는다 — 그래야 확대한 보람이 있다.
 
-  /* 이동평균 — 엔진에서 전체 이력 기준으로 미리 계산해 실어 보낸 값. 200일선이 화면의 기준선이다. */
-  [["ma200","var(--faint)",1],["ma150","var(--muted)",1],["ma50","var(--lead)",1.3]].forEach(([key,col,sw])=>{
-    const a=s[key]; if(!a) return;
+   일봉은 최근 1년, 주봉은 5년이 실려 온다. 5년을 일봉으로 실으면 종목당
+   80KB 라 스냅샷이 8MB 를 넘겨서, 긴 흐름은 주봉이 맡는다.
+   ────────────────────────────────────────────────────────────────── */
+const CHART={t:null,mode:"D",i0:0,i1:0,host:null,box:null,svg:null};
+let CHARTDRAG=null;
+
+const chartBars=(t,mode)=>{
+  const s=t&&t.series; if(!s||!s.c||!s.c.length) return null;
+  if(mode==="W") return (s.w&&s.w.c&&s.w.c.length>2)?s.w:null;
+  return s;
+};
+
+const fmtVol=v=>v>=1e9?(v/1e9).toFixed(1)+"B":v>=1e6?Math.round(v/1e6)+"M"
+               :v>=1e3?Math.round(v/1e3)+"K":String(v|0);
+const fmtPx=v=>Math.abs(v)>=1000?v.toFixed(0):Math.abs(v)>=100?v.toFixed(1):v.toFixed(2);
+const fmtDay=s=>`${s.slice(0,2)}-${s.slice(2,4)}-${s.slice(4,6)}`;
+/* 창이 넓으면 연-월, 좁으면 월/일. 라벨이 6개뿐이라 둘을 섞으면 읽기 어렵다. */
+const fmtTick=(s,long)=>long?`${s.slice(0,2)}-${s.slice(2,4)}`:`${s.slice(2,4)}/${s.slice(4,6)}`;
+
+/* 축 눈금을 1·2·5 배수로 떨어뜨린다. 그냥 (hi-lo)/n 으로 자르면
+   1234.56 같은 숫자가 축에 박혀서 읽히지 않는다. */
+function niceTicks(lo,hi,count){
+  const raw=(hi-lo)/Math.max(1,count);
+  if(!(raw>0)) return [lo];
+  const mag=Math.pow(10,Math.floor(Math.log10(raw))), k=raw/mag;
+  const step=(k<1.5?1:k<3.5?2:k<7.5?5:10)*mag;
+  const out=[];
+  for(let v=Math.ceil(lo/step)*step; v<=hi+1e-9 && out.length<12; v+=step) out.push(+v.toFixed(6));
+  return out;
+}
+
+function mountChart(host,t){
+  if(!chartBars(t,"D")||chartBars(t,"D").c.length<10){
+    host.innerHTML='<p class="note">가격 시리즈가 없습니다.</p>'; CHART.t=null; return;
+  }
+  CHART.t=t; CHART.host=host;
+  const hasW=!!chartBars(t,"W");
+  host.innerHTML=`<div class="chart-bar">
+      <div class="seg">
+        <button data-m="D" class="on">일봉</button>
+        ${hasW?'<button data-m="W">주봉</button>':""}
+      </div>
+      <span class="chart-range"></span>
+      <button class="chart-reset">전체</button>
+    </div>
+    <div class="chart-box"><svg></svg></div>`;
+  CHART.box=host.querySelector(".chart-box");
+  CHART.svg=host.querySelector(".chart-box svg");
+  host.querySelectorAll(".seg button").forEach(b=>b.onclick=()=>chartMode(b.dataset.m));
+  host.querySelector(".chart-reset").onclick=()=>{
+    const s=chartBars(CHART.t,CHART.mode); if(!s) return;
+    CHART.i0=0; CHART.i1=s.c.length; drawChart();
+  };
+  bindChartBox();
+  chartMode("D");
+}
+
+function chartMode(m){
+  const s=chartBars(CHART.t,m); if(!s) return;
+  CHART.mode=m;
+  CHART.host.querySelectorAll(".seg button").forEach(b=>b.classList.toggle("on",b.dataset.m===m));
+  /* 일봉은 최근 반년, 주봉은 5년 전체를 기본으로 연다. */
+  const n=s.c.length, win=m==="D"?Math.min(n,130):n;
+  CHART.i1=n; CHART.i0=Math.max(0,n-win);
+  drawChart();
+}
+
+/* 창 크기를 nm 으로 바꾸고 anchor(0~1) 지점을 제자리에 붙든다. */
+function chartZoom(nm,anchor){
+  const s=chartBars(CHART.t,CHART.mode); if(!s) return;
+  const n=s.c.length, m=CHART.i1-CHART.i0;
+  const at=CHART.i0+anchor*m;
+  nm=Math.max(8,Math.min(n,Math.round(nm)));
+  let a=Math.round(at-anchor*nm), b=a+nm;
+  if(a<0){a=0;b=nm;}
+  if(b>n){b=n;a=Math.max(0,n-nm);}
+  CHART.i0=a; CHART.i1=b; drawChart();
+}
+
+function chartPan(ratio){
+  const s=chartBars(CHART.t,CHART.mode); if(!s) return;
+  const n=s.c.length, m=CHART.i1-CHART.i0;
+  let a=Math.round(CHART.i0+ratio*m), b=a+m;
+  if(a<0){a=0;b=m;}
+  if(b>n){b=n;a=Math.max(0,n-m);}
+  if(a===CHART.i0) return;
+  CHART.i0=a; CHART.i1=b; drawChart();
+}
+
+function bindChartBox(){
+  const box=CHART.box; if(!box) return;
+  box.addEventListener("wheel",e=>{
+    e.preventDefault();
+    const r=box.getBoundingClientRect(), m=CHART.i1-CHART.i0;
+    chartZoom(m*(e.deltaY>0?1.18:0.85),(e.clientX-r.left)/(r.width||1));
+  },{passive:false});
+  box.addEventListener("mousedown",e=>{
+    CHARTDRAG={x:e.clientX,w:box.clientWidth||1}; e.preventDefault();
+  });
+  let tp=null;
+  box.addEventListener("touchstart",e=>{
+    if(e.touches.length===2){
+      tp={d:Math.abs(e.touches[0].clientX-e.touches[1].clientX)||1,
+          m:CHART.i1-CHART.i0,at:CHART.i0+(CHART.i1-CHART.i0)/2};
+    }else if(e.touches.length===1){
+      tp={x:e.touches[0].clientX,y:e.touches[0].clientY,w:box.clientWidth||1,axis:null};
+    }
+  },{passive:true});
+  box.addEventListener("touchmove",e=>{
+    if(!tp) return;
+    if(e.touches.length===2&&tp.d){
+      e.preventDefault();
+      const d=Math.abs(e.touches[0].clientX-e.touches[1].clientX)||1;
+      const n=(chartBars(CHART.t,CHART.mode)||{c:[]}).c.length;
+      const nm=Math.max(8,Math.min(n,Math.round(tp.m*tp.d/d)));
+      let a=Math.round(tp.at-nm/2), b=a+nm;
+      if(a<0){a=0;b=nm;}
+      if(b>n){b=n;a=Math.max(0,n-nm);}
+      CHART.i0=a; CHART.i1=b; drawChart();
+      return;
+    }
+    if(e.touches.length===1&&tp.x!=null){
+      const dx=e.touches[0].clientX-tp.x, dy=e.touches[0].clientY-tp.y;
+      /* 첫 움직임의 방향으로 주인을 정한다. 세로면 상세 시트 스크롤에 넘긴다. */
+      if(tp.axis===null){
+        if(Math.abs(dx)<3&&Math.abs(dy)<3) return;
+        tp.axis=Math.abs(dx)>Math.abs(dy)?"x":"y";
+      }
+      if(tp.axis!=="x") return;
+      e.preventDefault();
+      tp.x=e.touches[0].clientX; tp.y=e.touches[0].clientY;
+      chartPan(-dx/tp.w);
+    }
+  },{passive:false});
+  box.addEventListener("touchend",()=>{tp=null;},{passive:true});
+}
+
+/* 드래그는 창 전체에서 받는다 — 커서가 차트를 벗어나도 이어지도록.
+   차트를 열 때마다 붙이면 리스너가 쌓이므로 여기서 한 번만 건다. */
+window.addEventListener("mousemove",e=>{
+  if(!CHARTDRAG) return;
+  const dx=e.clientX-CHARTDRAG.x;
+  if(!dx) return;
+  CHARTDRAG.x=e.clientX;
+  chartPan(-dx/CHARTDRAG.w);
+});
+window.addEventListener("mouseup",()=>{CHARTDRAG=null;});
+
+function drawChart(){
+  const t=CHART.t, s=chartBars(t,CHART.mode), svg=CHART.svg;
+  if(!t||!s||!svg) return;
+  const n=s.c.length;
+  let i0=Math.max(0,Math.min(Math.round(CHART.i0),Math.max(0,n-8)));
+  let i1=Math.min(n,Math.max(Math.round(CHART.i1),i0+8));
+  CHART.i0=i0; CHART.i1=i1;
+  const m=i1-i0, sl=a=>a?a.slice(i0,i1):null;
+  const vo=sl(s.o), vh=sl(s.h), vl=sl(s.l), vc=sl(s.c), vv=sl(s.v), vt=sl(s.t);
+
+  const W=CHART.box.clientWidth||document.body.clientWidth-32;
+  const hasE=!!(t.quarters&&t.quarters.length);
+  const padL=6, padR=54, padT=10;
+  const PH=190, VH=56, EH=hasE?52:0, gapPV=16, gapVE=12, dateH=22;
+  const H=padT+PH+gapPV+VH+(hasE?gapVE+EH:0)+dateH;
+  const plotL=padL, plotR=W-padR;
+  const pTop=padT, pBot=pTop+PH;
+  const vTop=pBot+gapPV, vBot=vTop+VH;
+  const eTop=vBot+gapVE, eBot=eTop+EH;
+  const axisY=hasE?eBot:vBot;
+
+  /* 세로 범위는 보이는 구간에서만 잡는다. */
+  let lo=Infinity, hi=-Infinity;
+  vl.forEach(v=>{ if(v!=null&&v<lo) lo=v; });
+  vh.forEach(v=>{ if(v!=null&&v>hi) hi=v; });
+  ["ma50","ma150","ma200"].forEach(k=>{
+    const a=sl(s[k]); if(!a) return;
+    a.forEach(v=>{ if(v!=null){ if(v<lo)lo=v; if(v>hi)hi=v; } });
+  });
+  if(!(hi>lo)){ lo=(lo===Infinity?0:lo)-1; hi=lo+2; }
+  const gap=(hi-lo)*0.06; lo-=gap; hi+=gap;
+
+  const cell=(plotR-plotL)/m;
+  const x=i=>plotL+(i+0.5)*cell;
+  const bw=Math.max(1,Math.min(14,cell*0.68));
+  const y=v=>pBot-(v-lo)/(hi-lo)*PH;
+
+  const o=[`<rect x="0" y="0" width="${W}" height="${H}" fill="var(--ground)"/>`];
+
+  /* 가로 격자 + 가격 눈금 */
+  niceTicks(lo,hi,4).forEach(v=>{
+    const yy=y(v); if(yy<pTop-.5||yy>pBot+.5) return;
+    o.push(`<line x1="${plotL}" y1="${yy.toFixed(1)}" x2="${plotR}" y2="${yy.toFixed(1)}" stroke="var(--grid)" stroke-width="1"/>`,
+           `<text x="${plotR+5}" y="${(yy+3.4).toFixed(1)}" fill="var(--axis)" style="font:500 9px var(--mono)">${fmtPx(v)}</text>`);
+  });
+
+  /* 세로 격자 + 날짜 눈금 */
+  const long=CHART.mode==="W"||m>190;
+  const every=Math.max(1,Math.round(m/5));
+  for(let i=0;i<m;i+=every){
+    const cx=x(i); if(cx>plotR-12) break;
+    /* 양 끝 라벨은 가운데 정렬하면 화면 밖으로 삐져나간다. 끝에서는 안쪽으로 붙인다. */
+    const an=cx<24?"start":cx>plotR-24?"end":"middle";
+    const tx=an==="start"?plotL:an==="end"?plotR:cx;
+    o.push(`<line x1="${cx.toFixed(1)}" y1="${pTop}" x2="${cx.toFixed(1)}" y2="${axisY}" stroke="var(--grid)" stroke-width="1" opacity=".7"/>`,
+           `<text x="${tx.toFixed(1)}" y="${axisY+14}" text-anchor="${an}" fill="var(--axis)" style="font:500 9px var(--mono)">${fmtTick(vt[i],long)}</text>`);
+  }
+
+  /* 이동평균. 200일선이 화면의 기준선이라 가장 굵고 진하게 둔다. */
+  [["ma200","var(--ma200)",1.5],["ma150","var(--ma150)",1],["ma50","var(--ma50)",1.2]].forEach(([k,col,sw])=>{
+    const a=s[k]; if(!a) return;
     let d="",pen=false;
-    a.forEach((v,i)=>{ if(v==null){pen=false;return;} d+=`${pen?"L":"M"}${x(i).toFixed(1)} ${y(v).toFixed(1)}`; pen=true; });
-    if(d) o.push(`<path d="${d}" fill="none" stroke="${col}" stroke-width="${sw}" opacity=".85"/>`);
+    for(let i=i0;i<i1;i++){
+      const v=a[i];
+      if(v==null){ pen=false; continue; }
+      d+=`${pen?"L":"M"}${x(i-i0).toFixed(1)} ${y(v).toFixed(1)}`; pen=true;
+    }
+    if(d) o.push(`<path d="${d}" fill="none" stroke="${col}" stroke-width="${sw}" opacity=".92"/>`);
   });
 
   /* 캔들 */
-  for(let i=0;i<n;i++){
-    const up=s.c[i]>=s.o[i], col=up?"var(--up)":"var(--down)";
-    const yo=y(s.o[i]), yc=y(s.c[i]);
-    o.push(`<line x1="${x(i).toFixed(1)}" y1="${y(s.h[i]).toFixed(1)}" x2="${x(i).toFixed(1)}" y2="${y(s.l[i]).toFixed(1)}" stroke="${col}" stroke-width="1" opacity=".75"/>`);
-    o.push(`<rect x="${(x(i)-bw/2).toFixed(1)}" y="${Math.min(yo,yc).toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(1,Math.abs(yc-yo)).toFixed(1)}" fill="${col}"/>`);
+  for(let i=0;i<m;i++){
+    if(vc[i]==null||vo[i]==null) continue;
+    const up=vc[i]>=vo[i], col=up?"var(--up)":"var(--down)", cx=x(i);
+    o.push(`<line x1="${cx.toFixed(1)}" y1="${y(vh[i]).toFixed(1)}" x2="${cx.toFixed(1)}" y2="${y(vl[i]).toFixed(1)}" stroke="${col}" stroke-width="1"/>`);
+    const a=y(vo[i]), b=y(vc[i]);
+    o.push(`<rect x="${(cx-bw/2).toFixed(1)}" y="${Math.min(a,b).toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(1,Math.abs(b-a)).toFixed(1)}" fill="${col}"/>`);
   }
 
   /* 지지선 — 가격축 쪽에 태그로. 캔들 위에 글자를 얹지 않는다. */
-  [[t.stop1_pct,"1차"],[t.stop2_pct,"2차"]].forEach(([p,label])=>{
+  [[t.stop1_pct],[t.stop2_pct]].forEach(([p])=>{
     if(p==null||!t.price) return;
     const lv=t.price*(1+p/100); if(lv<lo||lv>hi) return;
     const yy=y(lv);
-    o.push(`<line x1="0" y1="${yy.toFixed(1)}" x2="${w}" y2="${yy.toFixed(1)}" stroke="var(--weaken)" stroke-width="1" stroke-dasharray="3 4" opacity=".55"/>`);
-    o.push(`<text x="${w+4}" y="${(yy+3.5).toFixed(1)}" fill="var(--weaken)" style="font:600 9px var(--mono)">${p}%</text>`);
+    o.push(`<line x1="${plotL}" y1="${yy.toFixed(1)}" x2="${plotR}" y2="${yy.toFixed(1)}" stroke="var(--weaken)" stroke-width="1" stroke-dasharray="3 4" opacity=".6"/>`);
   });
-  o.push(`<text x="${w+4}" y="${(y(s.c[n-1])+3.5).toFixed(1)}" fill="var(--text)" style="font:700 10px var(--mono)">${s.c[n-1]}</text>`);
+
+  /* 마지막 종가 — 축 위에 칩으로 얹는다. */
+  const last=vc[m-1];
+  if(last!=null){
+    const yy=Math.max(pTop+6,Math.min(pBot-1,y(last)));
+    o.push(`<rect x="${plotR+2}" y="${(yy-7).toFixed(1)}" width="${padR-4}" height="14" rx="3" fill="var(--text)"/>`,
+           `<text x="${plotR+5}" y="${(yy+3.4).toFixed(1)}" fill="var(--ground)" style="font:700 9px var(--mono)">${fmtPx(last)}</text>`);
+  }
 
   /* 거래량 */
-  const vmax=Math.max(...s.v)||1, vy=PH+gap;
-  for(let i=0;i<n;i++){
-    const h=s.v[i]/vmax*VH;
-    o.push(`<rect x="${(x(i)-bw/2).toFixed(1)}" y="${(vy+VH-h).toFixed(1)}" width="${bw.toFixed(1)}" height="${h.toFixed(1)}" fill="${s.c[i]>=s.o[i]?"var(--up)":"var(--down)"}" opacity=".3"/>`);
+  let vmax=0; vv.forEach(v=>{ if(v>vmax) vmax=v; });
+  vmax=vmax||1;
+  o.push(`<line x1="${plotL}" y1="${vBot}" x2="${plotR}" y2="${vBot}" stroke="var(--hair)" stroke-width="1"/>`);
+  for(let i=0;i<m;i++){
+    const hgt=(vv[i]||0)/vmax*VH; if(hgt<=0) continue;
+    const up=vc[i]>=vo[i];
+    o.push(`<rect x="${(x(i)-bw/2).toFixed(1)}" y="${(vBot-hgt).toFixed(1)}" width="${bw.toFixed(1)}" height="${hgt.toFixed(1)}" fill="${up?"var(--up)":"var(--down)"}" opacity=".6"/>`);
   }
+  o.push(`<text x="${plotL+2}" y="${vTop+9}" fill="var(--axis)" style="font:600 9px var(--sans)">거래량</text>`,
+         `<text x="${plotR+5}" y="${vTop+9}" fill="var(--axis)" style="font:500 9px var(--mono)">${fmtVol(vmax)}</text>`);
 
   /* EPS·매출 계단 — 다음 발표일까지 수평. 분기값을 그대로 쓴다. */
-  if(EH){
-    const top=PH+VH+gap*2, qs=t.quarters;
-    const pos=d=>{const i=s.t.findIndex(v=>v>=d);return i<0?w:x(i);};
-    const eLo=Math.min(...qs.map(q=>q.eps)), eHi=Math.max(...qs.map(q=>q.eps));
-    const eSpan=(eHi-eLo)||1, eY=v=>top+EH*0.62-(v-eLo)/eSpan*EH*0.42;
-    const rLo=Math.min(...qs.map(q=>q.rev)), rHi=Math.max(...qs.map(q=>q.rev));
-    const rSpan=(rHi-rLo)||1, rY=v=>top+EH*0.22-(v-rLo)/rSpan*EH*0.16;
+  if(hasE){
+    const qs=t.quarters;
+    const pos=d=>{
+      let i=s.t.findIndex(v=>v>=d);
+      if(i<0) i=n-1;
+      return x(Math.max(0,Math.min(m-1,i-i0)));
+    };
+    const es=qs.map(q=>q.eps).filter(v=>v!=null), rs=qs.map(q=>q.rev).filter(v=>v!=null);
+    const eLo=Math.min(...es), eHi=Math.max(...es), eSpan=(eHi-eLo)||1;
+    const rLo=Math.min(...rs), rHi=Math.max(...rs), rSpan=(rHi-rLo)||1;
+    const eY=v=>eBot-6-(v-eLo)/eSpan*(EH*0.42);
+    const rY=v=>eBot-6-(EH*0.5)-(v-rLo)/rSpan*(EH*0.34);
     let de="",dr="";
     qs.forEach((q,i)=>{
-      const x0=pos(q.date), x1=i+1<qs.length?pos(qs[i+1].date):w;
-      de+=`${i?"L":"M"}${x0.toFixed(1)} ${eY(q.eps).toFixed(1)}L${x1.toFixed(1)} ${eY(q.eps).toFixed(1)}`;
-      dr+=`${i?"L":"M"}${x0.toFixed(1)} ${rY(q.rev).toFixed(1)}L${x1.toFixed(1)} ${rY(q.rev).toFixed(1)}`;
-      o.push(`<text x="${Math.min(x1-2,x0+3).toFixed(1)}" y="${(eY(q.eps)-4).toFixed(1)}" fill="var(--muted)" style="font:600 8px var(--mono)">${q.eps}</text>`);
+      const x0=pos(q.date), x1=i+1<qs.length?pos(qs[i+1].date):plotR;
+      if(q.eps!=null) de+=`${de?"L":"M"}${x0.toFixed(1)} ${eY(q.eps).toFixed(1)}L${x1.toFixed(1)} ${eY(q.eps).toFixed(1)}`;
+      if(q.rev!=null) dr+=`${dr?"L":"M"}${x0.toFixed(1)} ${rY(q.rev).toFixed(1)}L${x1.toFixed(1)} ${rY(q.rev).toFixed(1)}`;
     });
-    o.push(`<path d="${dr}" fill="none" stroke="var(--improve)" stroke-width="1.1" opacity=".55"/>`);
-    o.push(`<path d="${de}" fill="none" stroke="var(--lead)" stroke-width="1.8"/>`);
-    o.push(`<text x="0" y="${(top+EH-2).toFixed(1)}" fill="var(--faint)" style="font:500 8px var(--sans)">분기 EPS(금) · 매출(청)</text>`);
+    if(dr) o.push(`<path d="${dr}" fill="none" stroke="var(--improve)" stroke-width="1.2" opacity=".7"/>`);
+    if(de) o.push(`<path d="${de}" fill="none" stroke="var(--ma50)" stroke-width="1.8"/>`);
+    o.push(`<text x="${plotL+2}" y="${eTop+9}" fill="var(--axis)" style="font:600 9px var(--sans)">분기 EPS · 매출</text>`);
   }
-  o.push("</svg>");
-  return o.join("");
+
+  svg.setAttribute("viewBox",`0 0 ${W} ${H}`);
+  svg.setAttribute("height",H);
+  svg.innerHTML=o.join("");
+
+  const rng=CHART.host.querySelector(".chart-range");
+  if(rng) rng.textContent=`${fmtDay(vt[0])} → ${fmtDay(vt[m-1])} · ${m}봉`;
 }
 
 (function start(){

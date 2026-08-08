@@ -54,6 +54,11 @@ def main(path: str = "latest.json") -> None:
     if with_series < len(tickers) * 0.8:
         fail(f"차트 시리즈가 {with_series}/{len(tickers)} 종목에만 있습니다")
 
+    # 주봉이 통째로 빠지면 차트의 기간 전환이 죽는다. 조용히 배포되지 않게 막는다.
+    with_week = sum(1 for t in tickers if (t.get("series") or {}).get("w"))
+    if with_week < with_series * 0.8:
+        fail(f"주봉이 {with_week}/{with_series} 종목에만 있습니다 — 수집 기간을 확인하세요")
+
     quads = {t["rs_quad"] for t in tickers if t.get("rs_quad")}
     if len(quads) < 2:
         fail(f"4분면이 한쪽으로 쏠렸습니다 — {quads}")

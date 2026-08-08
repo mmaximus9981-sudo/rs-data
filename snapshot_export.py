@@ -346,30 +346,57 @@ def quadrant_coords(leaders: pd.DataFrame,
 # 5b. 차트 시리즈 (앱이 직접 그리도록 압축해서 싣는다)
 # ---------------------------------------------------------------------------
 
-def compact_series(df: pd.DataFrame, as_of: pd.Timestamp, bars: int = 140) -> dict:
-    """최근 bars 봉을 앱이 그릴 수 있는 최소 형태로 압축한다.
-
-    PNG를 미리 굽는 대신 시리즈를 싣는 이유: 확대·스크롤이 되고, 굽는 단계가 사라지고,
-    종목당 140봉이면 4KB 남짓이라 전체를 합쳐도 스냅샷이 수 MB를 넘지 않는다.
-
-    소수점은 2자리로 자른다. 픽셀로 그릴 때 그 이하는 어차피 보이지 않는다.
-    """
-    px = _slice_to(df, as_of)
-    if px.empty:
-        return {}
-    # 이동평균은 전체 이력에서 계산한 뒤 자른다. 140봉만 잘라서 계산하면 200일선이 나오지 않는다.
-    mas = {p: px["Close"].rolling(p).mean() for p in (50, 150, 200)}
-    px = px.tail(bars)
+def _pack_bars(px: pd.DataFrame, mas: Dict[int, pd.Series]) -> dict:
+    """OHLCV + 이동평균을 앱이 그릴 최소 형태로. 소수점은 2자리에서 자른다 —
+    픽셀로 그릴 때 그 이하는 어차피 보이지 않는다."""
     r = lambda s: [None if pd.isna(v) else round(float(v), 2) for v in s]
     return {
         "t": [d.strftime("%y%m%d") for d in px.index],
         "o": r(px["Open"]), "h": r(px["High"]),
         "l": r(px["Low"]),  "c": r(px["Close"]),
-        "v": [int(v) if not pd.isna(v) else 0 for v in px["Volume"]],
-        "ma50": r(mas[50].tail(bars)),
-        "ma150": r(mas[150].tail(bars)),
-        "ma200": r(mas[200].tail(bars)),
+        "v": [0 if pd.isna(v) else int(v) for v in px["Volume"]],
+        "ma50": r(mas[50]), "ma150": r(mas[150]), "ma200": r(mas[200]),
     }
+
+
+def _weekly_bars(px: pd.DataFrame, mas: Dict[int, pd.Series], wbars: int) -> dict:
+    """주봉. 금요일을 주의 끝으로 묶는다.
+
+    이동평균은 주봉으로 다시 계산하지 않고 '일봉 기준값을 주말 시점에서 뽑아' 쓴다.
+    그래야 50/150/200'일'선이라는 의미가 일봉 차트와 어긋나지 않는다.
+    주봉으로 다시 굴리면 같은 이름의 선이 다른 값을 가리키게 된다.
+    """
+    agg = px.resample("W-FRI").agg({"Open": "first", "High": "max", "Low": "min",
+                                    "Close": "last", "Volume": "sum"})
+    agg = agg.dropna(subset=["Close"])
+    if agg.empty:
+        return {}
+    wm = {p: s.resample("W-FRI").last().reindex(agg.index) for p, s in mas.items()}
+    return _pack_bars(agg.tail(wbars), {p: s.tail(wbars) for p, s in wm.items()})
+
+
+def compact_series(df: pd.DataFrame, as_of: pd.Timestamp,
+                   bars: int = 250, wbars: int = 260) -> dict:
+    """차트용 시리즈. 일봉 1년과 주봉 5년을 함께 싣는다.
+
+    PNG를 미리 굽는 대신 시리즈를 싣는 이유: 확대·스크롤이 되고, 굽는 단계가 사라진다.
+    5년치를 일봉으로 그대로 실으면 종목당 80KB 가 넘어 스냅샷이 8MB 를 넘긴다.
+    같은 5년을 주봉으로 담으면 260봉이면 되므로, 긴 흐름은 주봉에 맡기고
+    일봉은 최근 1년만 싣는다.
+
+    주봉은 앱에서 만들지 않고 여기서 만들어 보낸다 — 앱에는 일봉이 1년치뿐이라
+    5년을 묶어낼 원본이 없기 때문이다.
+    """
+    px = _slice_to(df, as_of)
+    if px.empty:
+        return {}
+    # 이동평균은 전체 이력에서 계산한 뒤 자른다. 250봉만 잘라서 계산하면 200일선이 나오지 않는다.
+    mas = {p: px["Close"].rolling(p).mean() for p in (50, 150, 200)}
+    out = _pack_bars(px.tail(bars), {p: s.tail(bars) for p, s in mas.items()})
+    w = _weekly_bars(px, mas, wbars)
+    if w:
+        out["w"] = w
+    return out
 
 
 def eps_steps(quarters: Sequence[dict], as_of: pd.Timestamp) -> List[dict]:

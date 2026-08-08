@@ -78,7 +78,9 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=0, help="앞 N종목만 (빠른 확인)")
     ap.add_argument("--rs-min", type=int, default=80)
-    ap.add_argument("--years", type=float, default=3.0)
+    # 5년. 차트의 주봉이 5년을 덮으려면 원본이 그만큼 있어야 한다.
+    # 줄이면 주봉 구간이 그만큼 짧아진다.
+    ap.add_argument("--years", type=float, default=5.0)
     ap.add_argument("--refresh", action="store_true")
     ap.add_argument("--no-fundamentals", action="store_true")
     ap.add_argument("--out", default=OUT_DIR)
