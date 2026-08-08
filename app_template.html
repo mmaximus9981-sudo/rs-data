@@ -204,6 +204,9 @@ window.quadrant={loadSnapshot(j){boot(typeof j==="string"?JSON.parse(j):j);}};
 
 function boot(snap, source){
   DATA=snap;
+  /* 새 스냅샷에 없는 종목이 선택된 채로 남으면 어느 마커와도 일치하지 않아
+     지도가 통째로 흐려진다. 사라진 종목이면 선택을 놓는다. */
+  if(SEL&&!(snap.tickers||[]).some(t=>t.ticker===SEL)) SEL=null;
   const m=snap.market||{}, meta=snap.meta||{};
   const g=$("m-gauge"); g.textContent=m.m_gauge||"—";
   g.classList.toggle("off",!/확장|상승|매수/.test(m.m_gauge||""));
@@ -315,9 +318,11 @@ function drawMap(){
     const on=!SEL||t.ticker===SEL||(fam&&t.sub_industry===fam);
     const g=el("g",{class:"mark"+(on?"":" dim"),"data-tk":t.ticker});
     const c=QC[t.rs_quad]||"var(--lag)", x=xs(t.rs_x), y=ys(t.rs_y);
-    if(Array.isArray(t.trail)&&t.trail.length>1){
+    /* 이동 경로는 선택한 종목 하나만 그린다. 100종목을 전부 그리면
+       화면이 실뭉치가 돼서 정작 위치를 못 읽는다. */
+    if(t.ticker===SEL&&Array.isArray(t.trail)&&t.trail.length>1){
       const d=t.trail.map((p,i)=>(i?"L":"M")+xs(p[0])+" "+ys(p[1])).join(" ");
-      g.appendChild(el("path",{class:"tail",d:d+` L${x} ${y}`,stroke:c,"stroke-width":1.2,opacity:on?.4:.07}));
+      g.appendChild(el("path",{class:"tail",d:d+` L${x} ${y}`,stroke:c,"stroke-width":1.2,opacity:.55}));
     }
     g.appendChild(marker(t,x,y,c));
     if(t.in_sp500) g.appendChild(el("circle",{cx:x,cy:y,r:1.7,fill:"var(--ground)",opacity:.9}));
@@ -344,7 +349,7 @@ function marker(t,x,y,c){
 
 $("mapsvg").addEventListener("click",e=>{
   const g=e.target.closest("g.mark");
-  if(!g){SEL=null;drawMap();return;}
+  if(!g){if(SEL){SEL=null;drawMap();}return;}
   if(SEL===g.dataset.tk){openDetail(SEL);return;}
   SEL=g.dataset.tk; drawMap();
 });
