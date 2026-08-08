@@ -299,8 +299,23 @@ function drawMap(){
   const w=svg.clientWidth||360, h=svg.clientHeight||480;
   const pad={t:40,r:26,b:64,l:26};
   const ax=DATA.axes||{x_split:90,y_split:50};
-  const xs=v=>pad.l+(v-60)/40*(w-pad.l-pad.r);
-  const ys=v=>h-pad.b-(v/100)*(h-pad.t-pad.b);
+  const pts=(DATA.tickers||[]).filter(t=>t.rs_x!=null&&t.rs_y!=null);
+
+  /* 축 범위를 데이터에 맞춘다. [60,100] 으로 못박아 두면 화면이 남아돈다 —
+     이 앱에 담기는 건 스크리너를 통과한 종목뿐이라 RS 가 구조적으로 높은
+     쪽에 몰리고, 실제로 x 는 80 아래로 내려가지 않는다.
+     분면 경계선이 범위 밖으로 밀려나지 않도록 씨앗으로 함께 넣는다.
+     그래서 종목이 없거나 한 종목뿐이어도 폭이 0 이 되지 않는다. */
+  const span=(vals,split)=>{
+    let lo=split, hi=split;
+    vals.forEach(v=>{ if(v<lo) lo=v; if(v>hi) hi=v; });
+    const m=Math.max((hi-lo)*0.06,1);     // 가장자리 마커와 라벨이 잘리지 않게
+    return [lo-m,hi+m];
+  };
+  const [x0,x1]=span(pts.map(t=>t.rs_x),ax.x_split);
+  const [y0,y1]=span(pts.map(t=>t.rs_y),ax.y_split);
+  const xs=v=>pad.l+(v-x0)/(x1-x0)*(w-pad.l-pad.r);
+  const ys=v=>h-pad.b-(v-y0)/(y1-y0)*(h-pad.t-pad.b);
   svg.setAttribute("viewBox",`0 0 ${w} ${h}`); svg.innerHTML="";
   const g0=el("g",{transform:`translate(${view.x} ${view.y}) scale(${view.k})`});
   svg.appendChild(g0);
@@ -311,7 +326,6 @@ function drawMap(){
    ["부진",pad.l+4,h-pad.b-8,"start"],["약화",w-pad.r-4,h-pad.b-8,"end"]]
    .forEach(([tx,x,y,an])=>{const n=el("text",{class:"quad-tag",x,y,"text-anchor":an});n.textContent=tx;g0.appendChild(n);});
 
-  const pts=(DATA.tickers||[]).filter(t=>t.rs_x!=null&&t.rs_y!=null);
   const fam=SEL?(pts.find(t=>t.ticker===SEL)||{}).sub_industry:null;
 
   pts.forEach(t=>{
