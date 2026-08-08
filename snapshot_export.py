@@ -359,44 +359,27 @@ def _pack_bars(px: pd.DataFrame, mas: Dict[int, pd.Series]) -> dict:
     }
 
 
-def _weekly_bars(px: pd.DataFrame, mas: Dict[int, pd.Series], wbars: int) -> dict:
-    """주봉. 금요일을 주의 끝으로 묶는다.
-
-    이동평균은 주봉으로 다시 계산하지 않고 '일봉 기준값을 주말 시점에서 뽑아' 쓴다.
-    그래야 50/150/200'일'선이라는 의미가 일봉 차트와 어긋나지 않는다.
-    주봉으로 다시 굴리면 같은 이름의 선이 다른 값을 가리키게 된다.
-    """
-    agg = px.resample("W-FRI").agg({"Open": "first", "High": "max", "Low": "min",
-                                    "Close": "last", "Volume": "sum"})
-    agg = agg.dropna(subset=["Close"])
-    if agg.empty:
-        return {}
-    wm = {p: s.resample("W-FRI").last().reindex(agg.index) for p, s in mas.items()}
-    return _pack_bars(agg.tail(wbars), {p: s.tail(wbars) for p, s in wm.items()})
-
-
-def compact_series(df: pd.DataFrame, as_of: pd.Timestamp,
-                   bars: int = 250, wbars: int = 260) -> dict:
-    """차트용 시리즈. 일봉 1년과 주봉 5년을 함께 싣는다.
+def compact_series(df: pd.DataFrame, as_of: pd.Timestamp, bars: int = 1260) -> dict:
+    """차트용 시리즈. 일봉 5년(약 1260 거래일)을 싣는다.
 
     PNG를 미리 굽는 대신 시리즈를 싣는 이유: 확대·스크롤이 되고, 굽는 단계가 사라진다.
-    5년치를 일봉으로 그대로 실으면 종목당 80KB 가 넘어 스냅샷이 8MB 를 넘긴다.
-    같은 5년을 주봉으로 담으면 260봉이면 되므로, 긴 흐름은 주봉에 맡기고
-    일봉은 최근 1년만 싣는다.
 
-    주봉은 앱에서 만들지 않고 여기서 만들어 보낸다 — 앱에는 일봉이 1년치뿐이라
-    5년을 묶어낼 원본이 없기 때문이다.
+    주봉은 따로 만들어 보내지 않는다. 일봉 5년이 실려 있으면 앱에서 주 단위로
+    묶어낼 수 있고, 그러면 두 차트가 같은 원본을 보게 되어 어긋날 일이 없다.
+    같은 구간을 두 벌 싣는 것보다 종목당 15KB 가량 가볍기도 하다.
+
+    이동평균의 예열분은 화면에 내보내지 않는다. 200일선이 5년 구간의 첫날부터
+    그려지려면 그 앞의 200 거래일이 계산에만 쓰이고 잘려 나가야 한다 —
+    그래서 run_sp500 이 6년을 받아 온다. 받은 만큼이 5년에 못 미치면
+    앞쪽 이동평균이 비고, 앱은 그 구간을 끊어서 그린다.
     """
     px = _slice_to(df, as_of)
     if px.empty:
         return {}
-    # 이동평균은 전체 이력에서 계산한 뒤 자른다. 250봉만 잘라서 계산하면 200일선이 나오지 않는다.
+    # 이동평균은 전체 이력에서 계산한 뒤 자른다. 1260봉만 잘라서 계산하면 200일선의
+    # 앞 200봉이 빈다.
     mas = {p: px["Close"].rolling(p).mean() for p in (50, 150, 200)}
-    out = _pack_bars(px.tail(bars), {p: s.tail(bars) for p, s in mas.items()})
-    w = _weekly_bars(px, mas, wbars)
-    if w:
-        out["w"] = w
-    return out
+    return _pack_bars(px.tail(bars), {p: s.tail(bars) for p, s in mas.items()})
 
 
 def eps_steps(quarters: Sequence[dict], as_of: pd.Timestamp) -> List[dict]:

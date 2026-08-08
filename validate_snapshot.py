@@ -54,10 +54,13 @@ def main(path: str = "latest.json") -> None:
     if with_series < len(tickers) * 0.8:
         fail(f"차트 시리즈가 {with_series}/{len(tickers)} 종목에만 있습니다")
 
-    # 주봉이 통째로 빠지면 차트의 기간 전환이 죽는다. 조용히 배포되지 않게 막는다.
-    with_week = sum(1 for t in tickers if (t.get("series") or {}).get("w"))
-    if with_week < with_series * 0.8:
-        fail(f"주봉이 {with_week}/{with_series} 종목에만 있습니다 — 수집 기간을 확인하세요")
+    # 봉 수가 줄면 차트의 기간 조절이 조용히 1년짜리로 쪼그라든다. 눈에 띄지 않는
+    # 고장이라 여기서 막는다. 상장한 지 얼마 안 된 종목이 섞이므로 중앙값으로 본다.
+    lens = sorted(len((t.get("series") or {}).get("c") or [])
+                  for t in tickers if t.get("series"))
+    if lens and lens[len(lens) // 2] < 900:
+        fail(f"일봉이 중앙값 {lens[len(lens)//2]}봉뿐입니다 "
+             f"(5년이면 약 1260봉) — 수집 기간을 확인하세요")
 
     quads = {t["rs_quad"] for t in tickers if t.get("rs_quad")}
     if len(quads) < 2:

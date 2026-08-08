@@ -136,13 +136,12 @@ button{font-family:inherit;border:0;background:none;color:inherit;cursor:pointer
 .note{margin:12px 0 0;font:500 11px/1.65 var(--sans);color:var(--faint)}
 
 /* ── 가격 차트 ─────────────────────────────────── */
-.chart-bar{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+.chart-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:7px}
 .seg{display:flex;border:1px solid var(--hair);border-radius:8px;overflow:hidden}
-.seg button{padding:6px 12px;font:600 11px/1 var(--sans);color:var(--muted);background:var(--ground)}
+.seg button{padding:6px 11px;font:600 11px/1 var(--sans);color:var(--muted);background:var(--ground)}
+.seg button+button{border-left:1px solid var(--hair)}
 .seg button.on{background:var(--text);color:var(--ground)}
-.chart-range{font:500 10px/1 var(--mono);color:var(--muted)}
-.chart-reset{margin-left:auto;padding:6px 10px;font:600 10px/1 var(--sans);
-  color:var(--muted);border:1px solid var(--hair);border-radius:8px}
+.chart-range{margin-bottom:7px;font:500 10px/1 var(--mono);color:var(--muted)}
 /* pan-y: 세로 스크롤은 시트에 넘기고 가로 끌기만 차트가 가져간다.
    none 으로 막으면 차트 위에서 상세 시트를 스크롤할 수 없다. */
 .chart-box{touch-action:pan-y;border:1px solid var(--hair);border-radius:10px;
@@ -518,15 +517,59 @@ function detailBody(t){
    [i0,i1) 인덱스 창으로 들고 있고, 확대·이동은 그 창만 움직인 뒤 다시 그린다.
    가격 범위도 창 안의 값으로만 잡는다 — 그래야 확대한 보람이 있다.
 
-   일봉은 최근 1년, 주봉은 5년이 실려 온다. 5년을 일봉으로 실으면 종목당
-   80KB 라 스냅샷이 8MB 를 넘겨서, 긴 흐름은 주봉이 맡는다.
+   일봉 5년이 실려 온다. 주봉은 서버가 따로 보내지 않고 여기서 묶는다 —
+   같은 원본을 보므로 두 차트가 어긋날 일이 없고, 같은 구간을 두 벌 싣지 않아
+   종목당 15KB 가 덜 나간다.
    ────────────────────────────────────────────────────────────────── */
-const CHART={t:null,mode:"D",i0:0,i1:0,host:null,box:null,svg:null};
+const CHART={t:null,mode:"D",i0:0,i1:0,years:1,host:null,box:null,svg:null};
 let CHARTDRAG=null;
+/* 한 해치를 몇 봉으로 보는가. 기간 버튼이 이 값으로 창 크기를 잡는다. */
+const YEAR_BARS={D:252,W:52};
+
+/* 확대할 때마다 다시 묶으면 1260봉을 매 프레임 훑게 된다. 종목당 한 번만. */
+const WEEKLY=new WeakMap();
+const weeklyOf=s=>{
+  let w=WEEKLY.get(s);
+  if(!w){ w=aggWeekly(s); WEEKLY.set(s,w); }
+  return w;
+};
+
+/* 일봉을 주 단위로 묶는다. 주가 바뀌는 지점은 '요일이 앞 봉보다 뒤로 가지 않을 때'.
+   같은 주 안에서 요일은 반드시 커지므로(월→화→…→금), 작아지거나 같아지면 새 주다.
+   공휴일로 주가 통째로 밀려도 이 규칙은 깨지지 않는다. */
+function aggWeekly(s){
+  const n=s.c.length, w={t:[],o:[],h:[],l:[],c:[],v:[],ma50:[],ma150:[],ma200:[]};
+  const dow=d=>new Date(Date.UTC(2000+ +d.slice(0,2),+d.slice(2,4)-1,+d.slice(4,6))).getUTCDay();
+  let prev=-1;
+  for(let i=0;i<n;i++){
+    const d=dow(s.t[i]), fresh=prev<0||d<=prev;
+    prev=d;
+    if(fresh){
+      w.t.push(s.t[i]); w.o.push(s.o[i]); w.h.push(s.h[i]); w.l.push(s.l[i]);
+      w.c.push(s.c[i]); w.v.push(s.v[i]||0);
+      w.ma50.push(s.ma50?s.ma50[i]:null);
+      w.ma150.push(s.ma150?s.ma150[i]:null);
+      w.ma200.push(s.ma200?s.ma200[i]:null);
+    }else{
+      const k=w.t.length-1;
+      w.t[k]=s.t[i];                       /* 라벨은 그 주의 마지막 거래일 */
+      if(s.h[i]!=null&&(w.h[k]==null||s.h[i]>w.h[k])) w.h[k]=s.h[i];
+      if(s.l[i]!=null&&(w.l[k]==null||s.l[i]<w.l[k])) w.l[k]=s.l[i];
+      w.c[k]=s.c[i];
+      w.v[k]+=s.v[i]||0;
+      /* 이동평균은 다시 굴리지 않고 그 주 마지막 값을 쓴다. 주봉으로 다시 계산하면
+         같은 이름의 선이 일봉 차트와 다른 값을 가리키게 된다. */
+      if(s.ma50) w.ma50[k]=s.ma50[i];
+      if(s.ma150) w.ma150[k]=s.ma150[i];
+      if(s.ma200) w.ma200[k]=s.ma200[i];
+    }
+  }
+  return w;
+}
 
 const chartBars=(t,mode)=>{
   const s=t&&t.series; if(!s||!s.c||!s.c.length) return null;
-  if(mode==="W") return (s.w&&s.w.c&&s.w.c.length>2)?s.w:null;
+  if(mode==="W"){ const w=weeklyOf(s); return w.c.length>2?w:null; }
   return s;
 };
 
@@ -555,33 +598,49 @@ function mountChart(host,t){
   }
   CHART.t=t; CHART.host=host;
   const hasW=!!chartBars(t,"W");
+  /* 기간 버튼은 실려 온 봉 수가 감당하는 것만 띄운다. 상장한 지 2년인 종목에
+     5년 버튼을 보여 봐야 눌러도 아무 일이 없다. */
+  const nD=chartBars(t,"D").c.length;
+  const spans=[1,2,3,5].filter(y=>y===1||nD>=YEAR_BARS.D*y*0.75);
   host.innerHTML=`<div class="chart-bar">
       <div class="seg">
         <button data-m="D" class="on">일봉</button>
         ${hasW?'<button data-m="W">주봉</button>':""}
       </div>
-      <span class="chart-range"></span>
-      <button class="chart-reset">전체</button>
+      <div class="seg">
+        ${spans.map(y=>`<button data-y="${y}">${y}년</button>`).join("")}
+        <button data-y="0">전체</button>
+      </div>
     </div>
+    <div class="chart-range"></div>
     <div class="chart-box"><svg></svg></div>`;
   CHART.box=host.querySelector(".chart-box");
   CHART.svg=host.querySelector(".chart-box svg");
-  host.querySelectorAll(".seg button").forEach(b=>b.onclick=()=>chartMode(b.dataset.m));
-  host.querySelector(".chart-reset").onclick=()=>{
-    const s=chartBars(CHART.t,CHART.mode); if(!s) return;
-    CHART.i0=0; CHART.i1=s.c.length; drawChart();
-  };
+  host.querySelectorAll("[data-m]").forEach(b=>b.onclick=()=>chartMode(b.dataset.m));
+  host.querySelectorAll("[data-y]").forEach(b=>b.onclick=()=>chartSpan(+b.dataset.y));
   bindChartBox();
+  CHART.mode="D"; CHART.years=1;
   chartMode("D");
 }
 
 function chartMode(m){
-  const s=chartBars(CHART.t,m); if(!s) return;
+  if(!chartBars(CHART.t,m)) return;
   CHART.mode=m;
-  CHART.host.querySelectorAll(".seg button").forEach(b=>b.classList.toggle("on",b.dataset.m===m));
-  /* 일봉은 최근 반년, 주봉은 5년 전체를 기본으로 연다. */
-  const n=s.c.length, win=m==="D"?Math.min(n,130):n;
-  CHART.i1=n; CHART.i0=Math.max(0,n-win);
+  CHART.host.querySelectorAll("[data-m]").forEach(b=>b.classList.toggle("on",b.dataset.m===m));
+  /* 보고 있던 기간은 그대로 들고 넘어간다. 2년을 보다 주봉으로 바꿨는데
+     기간이 5년으로 튀면 같은 구간을 다시 찾아야 한다. */
+  chartSpan(CHART.years==null?0:CHART.years);
+}
+
+/* yr 년치가 보이도록 창을 맞춘다. 0 이면 실려 온 전부. */
+function chartSpan(yr){
+  const s=chartBars(CHART.t,CHART.mode); if(!s) return;
+  const n=s.c.length;
+  const win=yr?Math.max(8,Math.min(n,Math.round(YEAR_BARS[CHART.mode]*yr))):n;
+  CHART.i1=n; CHART.i0=n-win;
+  /* 0 은 '전체' 라는 선택이고 null 은 '손으로 확대해 아무 버튼도 아님' 이다.
+     둘을 뭉개면 자유 확대 뒤에 전체 버튼이 켜져 있게 된다. */
+  CHART.years=yr;
   drawChart();
 }
 
@@ -594,7 +653,9 @@ function chartZoom(nm,anchor){
   let a=Math.round(at-anchor*nm), b=a+nm;
   if(a<0){a=0;b=nm;}
   if(b>n){b=n;a=Math.max(0,n-nm);}
-  CHART.i0=a; CHART.i1=b; drawChart();
+  CHART.i0=a; CHART.i1=b;
+  CHART.years=null;          /* 손으로 확대했으면 기간 버튼의 선택을 푼다 */
+  drawChart();
 }
 
 function chartPan(ratio){
@@ -636,7 +697,7 @@ function bindChartBox(){
       let a=Math.round(tp.at-nm/2), b=a+nm;
       if(a<0){a=0;b=nm;}
       if(b>n){b=n;a=Math.max(0,n-nm);}
-      CHART.i0=a; CHART.i1=b; drawChart();
+      CHART.i0=a; CHART.i1=b; CHART.years=null; drawChart();
       return;
     }
     if(e.touches.length===1&&tp.x!=null){
@@ -736,13 +797,30 @@ function drawChart(){
     if(d) o.push(`<path d="${d}" fill="none" stroke="${col}" stroke-width="${sw}" opacity=".92"/>`);
   });
 
-  /* 캔들 */
-  for(let i=0;i<m;i++){
-    if(vc[i]==null||vo[i]==null) continue;
-    const up=vc[i]>=vo[i], col=up?"var(--up)":"var(--down)", cx=x(i);
-    o.push(`<line x1="${cx.toFixed(1)}" y1="${y(vh[i]).toFixed(1)}" x2="${cx.toFixed(1)}" y2="${y(vl[i]).toFixed(1)}" stroke="${col}" stroke-width="1"/>`);
-    const a=y(vo[i]), b=y(vc[i]);
-    o.push(`<rect x="${(cx-bw/2).toFixed(1)}" y="${Math.min(a,b).toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(1,Math.abs(b-a)).toFixed(1)}" fill="${col}"/>`);
+  /* 캔들. 5년 일봉이면 1260봉이 900px 안에 들어가 한 봉이 1px 도 안 된다.
+     그 폭에서는 몸통이 심지와 구분되지 않고, 봉마다 노드를 만들면 2500개가 넘어
+     끌 때 눈에 띄게 밀린다. 그래서 촘촘할 때는 오르내림 두 갈래로 나눠
+     path 두 개에 몰아 그린다 — 그림은 같고 노드는 2개다. */
+  /* 2.2px 아래면 몸통 폭이 1.5px 도 안 돼 심지와 구분되지 않는다.
+     화면이 좁은 폰에서는 1년 일봉도 여기에 걸려 자연히 가벼워진다. */
+  const thin=cell<2.2;
+  if(thin){
+    let up="",dn="";
+    for(let i=0;i<m;i++){
+      if(vc[i]==null||vo[i]==null) continue;
+      const seg=`M${x(i).toFixed(1)} ${y(vh[i]).toFixed(1)}V${y(vl[i]).toFixed(1)}`;
+      if(vc[i]>=vo[i]) up+=seg; else dn+=seg;
+    }
+    if(up) o.push(`<path d="${up}" fill="none" stroke="var(--up)" stroke-width="1"/>`);
+    if(dn) o.push(`<path d="${dn}" fill="none" stroke="var(--down)" stroke-width="1"/>`);
+  }else{
+    for(let i=0;i<m;i++){
+      if(vc[i]==null||vo[i]==null) continue;
+      const col=vc[i]>=vo[i]?"var(--up)":"var(--down)", cx=x(i).toFixed(1);
+      o.push(`<line x1="${cx}" y1="${y(vh[i]).toFixed(1)}" x2="${cx}" y2="${y(vl[i]).toFixed(1)}" stroke="${col}" stroke-width="1"/>`);
+      const a=y(vo[i]), b=y(vc[i]);
+      o.push(`<rect x="${(x(i)-bw/2).toFixed(1)}" y="${Math.min(a,b).toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(1,Math.abs(b-a)).toFixed(1)}" fill="${col}"/>`);
+    }
   }
 
   /* 지지선 — 가격축 쪽에 태그로. 캔들 위에 글자를 얹지 않는다. */
@@ -765,10 +843,20 @@ function drawChart(){
   let vmax=0; vv.forEach(v=>{ if(v>vmax) vmax=v; });
   vmax=vmax||1;
   o.push(`<line x1="${plotL}" y1="${vBot}" x2="${plotR}" y2="${vBot}" stroke="var(--hair)" stroke-width="1"/>`);
-  for(let i=0;i<m;i++){
-    const hgt=(vv[i]||0)/vmax*VH; if(hgt<=0) continue;
-    const up=vc[i]>=vo[i];
-    o.push(`<rect x="${(x(i)-bw/2).toFixed(1)}" y="${(vBot-hgt).toFixed(1)}" width="${bw.toFixed(1)}" height="${hgt.toFixed(1)}" fill="${up?"var(--up)":"var(--down)"}" opacity=".6"/>`);
+  if(thin){
+    let up="",dn="";
+    for(let i=0;i<m;i++){
+      const hgt=(vv[i]||0)/vmax*VH; if(hgt<=0) continue;
+      const seg=`M${x(i).toFixed(1)} ${vBot}V${(vBot-hgt).toFixed(1)}`;
+      if(vc[i]>=vo[i]) up+=seg; else dn+=seg;
+    }
+    if(up) o.push(`<path d="${up}" fill="none" stroke="var(--up)" stroke-width="1" opacity=".6"/>`);
+    if(dn) o.push(`<path d="${dn}" fill="none" stroke="var(--down)" stroke-width="1" opacity=".6"/>`);
+  }else{
+    for(let i=0;i<m;i++){
+      const hgt=(vv[i]||0)/vmax*VH; if(hgt<=0) continue;
+      o.push(`<rect x="${(x(i)-bw/2).toFixed(1)}" y="${(vBot-hgt).toFixed(1)}" width="${bw.toFixed(1)}" height="${hgt.toFixed(1)}" fill="${vc[i]>=vo[i]?"var(--up)":"var(--down)"}" opacity=".6"/>`);
+    }
   }
   o.push(`<text x="${plotL+2}" y="${vTop+9}" fill="var(--axis)" style="font:600 9px var(--sans)">거래량</text>`,
          `<text x="${plotR+5}" y="${vTop+9}" fill="var(--axis)" style="font:500 9px var(--mono)">${fmtVol(vmax)}</text>`);
@@ -802,7 +890,12 @@ function drawChart(){
   svg.innerHTML=o.join("");
 
   const rng=CHART.host.querySelector(".chart-range");
-  if(rng) rng.textContent=`${fmtDay(vt[0])} → ${fmtDay(vt[m-1])} · ${m}봉`;
+  if(rng){
+    const yrs=(m/YEAR_BARS[CHART.mode]).toFixed(1);
+    rng.textContent=`${fmtDay(vt[0])} → ${fmtDay(vt[m-1])} · ${m}봉 · 약 ${yrs}년`;
+  }
+  CHART.host.querySelectorAll("[data-y]").forEach(b=>
+    b.classList.toggle("on",CHART.years!=null&&+b.dataset.y===CHART.years));
 }
 
 (function start(){
