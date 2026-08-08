@@ -1,5 +1,45 @@
-cache/
+# 파이썬
 __pycache__/
-*.pyc
+*.py[cod]
 .ipynb_checkpoints/
+venv/
+.venv/
+
+# 비밀. publish_github.py 는 토큰을 인자나 GH_TOKEN 으로 받지만,
+# 습관처럼 .env 를 만들어 두는 경우가 있어 미리 막아 둔다.
+.env
+.env.local
+
+# 안드로이드 · Gradle 산출물
+# build/ 는 깊이에 상관없이 걸린다 — android/build/, android/app/build/ 를
+# 한 줄로 덮고 모듈을 더 만들어도 따라온다.
+build/
+.gradle/
+.cxx/
+captures/
+local.properties
+*.apk
+*.aab
+
+# 서명 키. 유출되면 남이 내 앱 이름으로 업데이트를 낼 수 있다.
+*.keystore
+*.jks
+
+# 안드로이드 스튜디오
+.idea/
+*.iml
+
+# 이 프로젝트가 돌면서 만드는 것
+# cache/ 는 가격·펀더멘털 parquet·pickle 캐시.
+# snapshot_*.json 은 test_pipeline.py 와 배포 단계가 남기는 날짜별 사본이다.
+# latest.json 은 앱의 예비 데이터이므로 여기 걸리지 않게 이름을 좁혀 뒀다.
+cache/
+snapshot_*.json
+
+# 도구
 .claude/
+
+# OS 부스러기. 이 폴더가 OneDrive 안에 있어 desktop.ini 가 자주 생긴다.
+.DS_Store
+Thumbs.db
+desktop.ini
